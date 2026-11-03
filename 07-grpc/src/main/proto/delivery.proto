@@ -1,0 +1,49 @@
+// The contract. Server and client code are GENERATED from this file by `mvn compile`.
+// Look in target/generated-sources/protobuf after building.
+syntax = "proto3";
+
+package quickbite;
+
+option java_multiple_files = true;
+option java_package = "lab.grpc";
+
+service DeliveryService {
+  // Unary: one request, one response. Feels like calling a local method.
+  rpc GetEta (EtaRequest) returns (EtaReply);
+
+  // Server streaming: one request, a stream of responses (live rider location).
+  rpc TrackRider (TrackRequest) returns (stream RiderLocation);
+
+  // Client streaming (stretch): the rider app streams GPS points, server replies once at the end.
+  rpc UploadRoute (stream RiderLocation) returns (RouteSummary);
+}
+
+// Field NUMBERS (= 1, = 2 ...) are what go on the wire, not the names.
+// Never reuse or renumber them once clients exist -- that's how proto stays backward compatible.
+
+message EtaRequest {
+  string order_id = 1;
+}
+
+message EtaReply {
+  string order_id = 1;
+  int32 minutes = 2;
+  string rider_name = 3;
+}
+
+message TrackRequest {
+  string order_id = 1;
+}
+
+message RiderLocation {
+  string order_id = 1;
+  double lat = 2;
+  double lng = 3;
+  int32 meters_left = 4;
+  int64 timestamp_ms = 5;
+}
+
+message RouteSummary {
+  int32 points = 1;
+  double total_km = 2;
+}

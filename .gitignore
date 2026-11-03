@@ -1,0 +1,34 @@
+# Build and Dependency Directories
+target/
+*.class
+
+# Package files
+*.jar
+*.war
+*.ear
+
+# IDE and Editor files
+.idea/
+*.iml
+.vscode/
+.settings/
+.project
+.classpath
+.factorypath
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary / Scratch files
+*.tmp
+*.bak
+

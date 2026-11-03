@@ -1,0 +1,49 @@
+# QuickBite GraphQL schema.
+# The schema IS the API contract: every field a client may ask for, with its type.
+# "!" means non-null.  [X!]! means "a non-null list of non-null X".
+
+type Query {
+    "All restaurants, optionally only one cuisine (case-insensitive), e.g. \"South Indian\""
+    restaurants(cuisine: String): [Restaurant!]!
+
+    "One restaurant by id, or null if it doesn't exist"
+    restaurant(id: ID!): Restaurant
+}
+
+type Mutation {
+    "Add a review. rating must be 1..5"
+    addReview(input: ReviewInput!): Review!
+}
+
+input ReviewInput {
+    restaurantId: ID!
+    rating: Int!
+    comment: String
+}
+
+type Restaurant {
+    id: ID!
+    name: String!
+    cuisine: String!
+    rating: Float!
+    deliveryMinutes: Int!
+    "Resolved by its own data fetcher (TODO 3) -- only runs if the client asks for it"
+    menu(vegOnly: Boolean = false): [MenuItem!]!
+    "Latest reviews first"
+    reviews(last: Int = 3): [Review!]!
+}
+
+type MenuItem {
+    id: ID!
+    name: String!
+    price: Int!
+    veg: Boolean!
+    bestseller: Boolean!
+}
+
+type Review {
+    id: ID!
+    author: String!
+    rating: Int!
+    comment: String
+}
