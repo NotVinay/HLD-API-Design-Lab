@@ -207,7 +207,69 @@ public class OrderApi {
      */
     static void listOrders(HttpExchange ex) throws IOException {
         Map<String, String> q = Http.query(ex);
-        throw new UnsupportedOperationException("TODO(3) not implemented yet");
+
+        // Parse and validate status (optional filter)
+        String statusStr = q.get("status");
+        Status filterStatus = null;
+        if (statusStr != null && !statusStr.isBlank()) {
+            try {
+                filterStatus = Status.valueOf(statusStr);
+            } catch (IllegalArgumentException e) {
+                throw new Http.BadRequest("unknown status: " + statusStr);
+            }
+        }
+
+        // Parse and validate limit (default 10, max 50)
+        int limit = 10;
+        String limitStr = q.get("limit");
+        if (limitStr != null && !limitStr.isBlank()) {
+            try {
+                limit = Integer.parseInt(limitStr);
+            } catch (NumberFormatException e) {
+                throw new Http.BadRequest("limit must be an integer, got " + limitStr);
+            }
+            if (limit < 1 || limit > 50) {
+                throw new Http.BadRequest("limit must be between 1 and 50, got " + limit);
+            }
+        }
+
+        // Parse and validate offset (default 0)
+        int offset = 0;
+        String offsetStr = q.get("offset");
+        if (offsetStr != null && !offsetStr.isBlank()) {
+            try {
+                offset = Integer.parseInt(offsetStr);
+            } catch (NumberFormatException e) {
+                throw new Http.BadRequest("offset must be an integer, got " + offsetStr);
+            }
+            if (offset < 0) {
+                throw new Http.BadRequest("offset cannot be negative, got " + offset);
+            }
+        }
+
+        // Filter orders
+        List<Order> filtered = new ArrayList<>();
+        synchronized (ORDERS) {
+            for (Order o : ORDERS.values()) {
+                if (filterStatus == null || o.status() == filterStatus) {
+                    filtered.add(o);
+                }
+            }
+        }
+
+        // Slice page according to offset and limit
+        int total = filtered.size();
+        int fromIndex = Math.min(offset, total);
+        int toIndex = Math.min(fromIndex + limit, total);
+        List<Order> page = filtered.subList(fromIndex, toIndex);
+
+        // Return response
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("items", page);
+        response.put("total", total);
+        response.put("limit", limit);
+        response.put("offset", offset);
+        Http.send(ex, 200, response);
     }
 
     /**
