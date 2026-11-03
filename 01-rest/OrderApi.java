@@ -284,7 +284,34 @@ public class OrderApi {
      */
     static void patchOrder(HttpExchange ex, String id) throws IOException {
         Map<String, Object> body = Http.body(ex);
-        throw new UnsupportedOperationException("TODO(4) not implemented yet");
+        Object statusObj = body.get("status");
+        if (!(statusObj instanceof String statusStr) || statusStr.isBlank()) {
+            throw new Http.BadRequest("status is missing or not a string");
+        }
+        Status newStatus;
+        try {
+            newStatus = Status.valueOf(statusStr);
+        } catch (IllegalArgumentException e) {
+            throw new Http.BadRequest("unknown status: " + statusStr);
+        }
+        if (!newStatus.equals(Status.CANCELLED)) {
+            throw new Http.BadRequest("can only CANCEL the orders");
+        }
+        Order newOrder;
+        synchronized (ORDERS) {
+            Order order = ORDERS.get(id);
+            if (order == null) {
+                Http.send(ex, 404, Map.of("error", "Order " + id + " not found"));
+                return;
+            }
+            if (order.status() != Status.PLACED) {
+                Http.send(ex, 409, Map.of("error", "cannot cancel an order that is " + order.status()));
+                return;
+            }
+            newOrder = order.withStatus(newStatus);
+            ORDERS.put(id, newOrder);
+        }
+        Http.send(ex, 200, newOrder);
     }
 
     /**
