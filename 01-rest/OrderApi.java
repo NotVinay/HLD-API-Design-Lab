@@ -3,6 +3,7 @@ import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 
 import java.io.IOException;
+import java.lang.reflect.Array;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -113,9 +114,60 @@ public class OrderApi {
      *   (Why? A mobile app on flaky 4G retries POST — the user must not get charged twice.)
      */
     static void createOrder(HttpExchange ex) throws IOException {
-        Map<String, Object> body = Http.body(ex);
         String idemKey = ex.getRequestHeaders().getFirst("Idempotency-Key");
-        throw new UnsupportedOperationException("TODO(1) not implemented yet");
+        if (idemKey != null && IDEMPOTENCY_KEYS.containsKey(idemKey)) {
+            String existingId = IDEMPOTENCY_KEYS.get(idemKey);
+            Order existing = ORDERS.get(existingId);
+            if (existing != null) {
+                ex.getResponseHeaders().set("Idempotent-Replayed", "true");
+                Http.send(ex, 200, existing);
+                return;
+            }
+        }
+
+        Map<String, Object> body = Http.body(ex);
+
+        Object custObj = body.get("customerId");
+        if (!(custObj instanceof String custId) || custId.isBlank()) {
+            throw new Http.BadRequest("customerId is required and cannot be blank");
+        }
+
+        Object itemsObj = body.get("items");
+        if (!(itemsObj instanceof List<?> itemsList) || itemsList.isEmpty()) {
+            throw new Http.BadRequest("items must be a non-empty list");
+        }
+
+        List<Item> validatedItems = new ArrayList<>();
+        int total = 0;
+        for (Object itemObj : itemsList) {
+            if (!(itemObj instanceof Map<?, ?> itemMap)) {
+                throw new Http.BadRequest("each item must be an object");
+            }
+            Object idObj = itemMap.get("itemId");
+            if (!(idObj instanceof String itemId) || !MENU.containsKey(itemId)) {
+                throw new Http.BadRequest("unknown or invalid itemId: " + idObj);
+            }
+            Object qtyObj = itemMap.get("qty");
+            if (!(qtyObj instanceof Number qtyNum)) {
+                throw new Http.BadRequest("qty must be a number");
+            }
+            int qty = qtyNum.intValue();
+            if (qty < 1 || qty > 20) {
+                throw new Http.BadRequest("qty must be between 1 and 20, got " + qty);
+            }
+            validatedItems.add(new Item(itemId, qty));
+            total += MENU.get(itemId).price() * qty;
+        }
+
+        String id = "ord_" + SEQ.incrementAndGet();
+        Order order = new Order(id, custId, validatedItems, total, Status.PLACED, Instant.now().toString());
+        ORDERS.put(id, order);
+        if (idemKey != null) {
+            IDEMPOTENCY_KEYS.put(idemKey, id);
+        }
+
+        ex.getResponseHeaders().set("Location", "/orders/" + id);
+        Http.send(ex, 201, order);
     }
 
     /**
