@@ -3,6 +3,7 @@ import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 
 import java.io.IOException;
+import java.lang.reflect.Array;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -14,29 +15,35 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * Exercise 01 — REST API for QuickBite orders.
  *
- * Run:   java OrderApi.java          (server on http://localhost:8081)
- * Check: java Check.java             (in another terminal)
+ * Run: java OrderApi.java (server on http://localhost:8081)
+ * Check: java Check.java (in another terminal)
  *
  * Endpoints you will make work:
- *   GET    /menu                       -> 200 list of menu items   (already done — use it as your example)
- *   POST   /orders                     -> 201 + Location header    (TODO 1, idempotency TODO 5)
- *   GET    /orders/{id}                -> 200 / 404                (TODO 2)
- *   GET    /orders?status=&limit=&offset= -> 200 paginated list   (TODO 3)
- *   PATCH  /orders/{id}  {"status":"CANCELLED"} -> 200 / 400 / 409 (TODO 4)
+ * GET /menu -> 200 list of menu items (already done — use it as your example)
+ * POST /orders -> 201 + Location header (TODO 1, idempotency TODO 5)
+ * GET /orders/{id} -> 200 / 404 (TODO 2)
+ * GET /orders?status=&limit=&offset= -> 200 paginated list (TODO 3)
+ * PATCH /orders/{id} {"status":"CANCELLED"} -> 200 / 400 / 409 (TODO 4)
  */
 public class OrderApi {
 
     static final int PORT = 8081;
 
     // ---------- Domain ----------
-    enum Status { PLACED, PREPARING, OUT_FOR_DELIVERY, DELIVERED, CANCELLED }
+    enum Status {
+        PLACED, PREPARING, OUT_FOR_DELIVERY, DELIVERED, CANCELLED
+    }
 
-    record MenuItem(String itemId, String name, int price) {}
+    record MenuItem(String itemId, String name, int price) {
+    }
 
-    record Item(String itemId, int qty) {}
+    record Item(String itemId, int qty) {
+    }
 
     record Order(String id, String customerId, List<Item> items, int total, Status status, String createdAt) {
-        Order withStatus(Status s) { return new Order(id, customerId, items, total, s, createdAt); }
+        Order withStatus(Status s) {
+            return new Order(id, customerId, items, total, s, createdAt);
+        }
     }
 
     static final Map<String, MenuItem> MENU = new LinkedHashMap<>();
@@ -68,20 +75,23 @@ public class OrderApi {
 
     // ---------- Routing (given) ----------
     static void menu(HttpExchange ex) throws IOException {
-        if (!ex.getRequestMethod().equals("GET")) { Http.methodNotAllowed(ex, "GET"); return; }
+        if (!ex.getRequestMethod().equals("GET")) {
+            Http.methodNotAllowed(ex, "GET");
+            return;
+        }
         Http.send(ex, 200, new ArrayList<>(MENU.values()));
     }
 
     static void orders(HttpExchange ex) throws IOException {
         String[] parts = ex.getRequestURI().getPath().split("/"); // ["", "orders", "{id}"]
         String method = ex.getRequestMethod();
-        if (parts.length == 2) {                       // /orders
+        if (parts.length == 2) { // /orders
             switch (method) {
                 case "POST" -> createOrder(ex);
                 case "GET" -> listOrders(ex);
                 default -> Http.methodNotAllowed(ex, "GET, POST");
             }
-        } else if (parts.length == 3) {                // /orders/{id}
+        } else if (parts.length == 3) { // /orders/{id}
             switch (method) {
                 case "GET" -> getOrder(ex, parts[2]);
                 case "PATCH" -> patchOrder(ex, parts[2]);
@@ -100,61 +110,215 @@ public class OrderApi {
      * Body: {"customerId":"cust_7","items":[{"itemId":"masala-dosa","qty":2}]}
      *
      * TODO(1): Validate and create an order.
-     *   - customerId must be a non-blank string                     -> else 400
-     *   - items must be a non-empty list                            -> else 400
-     *   - every itemId must exist in MENU, qty must be 1..20        -> else 400 with a helpful message
-     *   - total = sum(price * qty); id = "ord_" + SEQ.incrementAndGet(); status = PLACED
-     *   - respond 201 Created, with header  Location: /orders/{id}  and the order as body
+     * - customerId must be a non-blank string -> else 400
+     * - items must be a non-empty list -> else 400
+     * - every itemId must exist in MENU, qty must be 1..20 -> else 400 with a
+     * helpful message
+     * - total = sum(price * qty); id = "ord_" + SEQ.incrementAndGet(); status =
+     * PLACED
+     * - respond 201 Created, with header Location: /orders/{id} and the order as
+     * body
      *
      * TODO(5) (do this after the others pass): Idempotency.
-     *   If the request has an "Idempotency-Key" header that we have already seen,
-     *   do NOT create a new order. Return 200 with the ORIGINAL order and the header
-     *   "Idempotent-Replayed: true". Otherwise remember key -> orderId after creating.
-     *   (Why? A mobile app on flaky 4G retries POST — the user must not get charged twice.)
+     * If the request has an "Idempotency-Key" header that we have already seen,
+     * do NOT create a new order. Return 200 with the ORIGINAL order and the header
+     * "Idempotent-Replayed: true". Otherwise remember key -> orderId after
+     * creating.
+     * (Why? A mobile app on flaky 4G retries POST — the user must not get charged
+     * twice.)
      */
     static void createOrder(HttpExchange ex) throws IOException {
-        Map<String, Object> body = Http.body(ex);
         String idemKey = ex.getRequestHeaders().getFirst("Idempotency-Key");
-        throw new UnsupportedOperationException("TODO(1) not implemented yet");
+        if (idemKey != null && IDEMPOTENCY_KEYS.containsKey(idemKey)) {
+            String existingId = IDEMPOTENCY_KEYS.get(idemKey);
+            Order existing = ORDERS.get(existingId);
+            if (existing != null) {
+                ex.getResponseHeaders().set("Idempotent-Replayed", "true");
+                Http.send(ex, 200, existing);
+                return;
+            }
+        }
+
+        Map<String, Object> body = Http.body(ex);
+
+        Object custObj = body.get("customerId");
+        if (!(custObj instanceof String custId) || custId.isBlank()) {
+            throw new Http.BadRequest("customerId is required and cannot be blank");
+        }
+
+        Object itemsObj = body.get("items");
+        if (!(itemsObj instanceof List<?> itemsList) || itemsList.isEmpty()) {
+            throw new Http.BadRequest("items must be a non-empty list");
+        }
+
+        List<Item> validatedItems = new ArrayList<>();
+        int total = 0;
+        for (Object itemObj : itemsList) {
+            if (!(itemObj instanceof Map<?, ?> itemMap)) {
+                throw new Http.BadRequest("each item must be an object");
+            }
+            Object idObj = itemMap.get("itemId");
+            if (!(idObj instanceof String itemId) || !MENU.containsKey(itemId)) {
+                throw new Http.BadRequest("unknown or invalid itemId: " + idObj);
+            }
+            Object qtyObj = itemMap.get("qty");
+            if (!(qtyObj instanceof Number qtyNum)) {
+                throw new Http.BadRequest("qty must be a number");
+            }
+            int qty = qtyNum.intValue();
+            if (qty < 1 || qty > 20) {
+                throw new Http.BadRequest("qty must be between 1 and 20, got " + qty);
+            }
+            validatedItems.add(new Item(itemId, qty));
+            total += MENU.get(itemId).price() * qty;
+        }
+
+        String id = "ord_" + SEQ.incrementAndGet();
+        Order order = new Order(id, custId, validatedItems, total, Status.PLACED, Instant.now().toString());
+        ORDERS.put(id, order);
+        if (idemKey != null) {
+            IDEMPOTENCY_KEYS.put(idemKey, id);
+        }
+
+        ex.getResponseHeaders().set("Location", "/orders/" + id);
+        Http.send(ex, 201, order);
     }
 
     /**
      * GET /orders/{id}
-     * TODO(2): return 200 with the order, or 404 {"error": "..."} if it does not exist.
      */
     static void getOrder(HttpExchange ex, String id) throws IOException {
-        throw new UnsupportedOperationException("TODO(2) not implemented yet");
+        Order order = ORDERS.get(id);
+        if (order != null) {
+            Http.send(ex, 200, order);
+        } else {
+            Http.send(ex, 404, Map.of("error", "Order not found"));
+        }
     }
 
     /**
      * GET /orders?status=PLACED&limit=10&offset=0
      * TODO(3): filter + paginate.
-     *   - status is optional; an unknown status value -> 400
-     *   - limit defaults to 10 (max 50), offset defaults to 0; bad numbers -> 400
-     *   - respond 200 with {"items":[...], "total": <count after filtering>, "limit": n, "offset": n}
-     *   Hint: Http.query(ex) gives you the query parameters as a Map.
+     * - status is optional; an unknown status value -> 400
+     * - limit defaults to 10 (max 50), offset defaults to 0; bad numbers -> 400
+     * - respond 200 with {"items":[...], "total": <count after filtering>, "limit":
+     * n, "offset": n}
+     * Hint: Http.query(ex) gives you the query parameters as a Map.
      */
     static void listOrders(HttpExchange ex) throws IOException {
         Map<String, String> q = Http.query(ex);
-        throw new UnsupportedOperationException("TODO(3) not implemented yet");
+
+        // Parse and validate status (optional filter)
+        String statusStr = q.get("status");
+        Status filterStatus = null;
+        if (statusStr != null && !statusStr.isBlank()) {
+            try {
+                filterStatus = Status.valueOf(statusStr);
+            } catch (IllegalArgumentException e) {
+                throw new Http.BadRequest("unknown status: " + statusStr);
+            }
+        }
+
+        // Parse and validate limit (default 10, max 50)
+        int limit = 10;
+        String limitStr = q.get("limit");
+        if (limitStr != null && !limitStr.isBlank()) {
+            try {
+                limit = Integer.parseInt(limitStr);
+            } catch (NumberFormatException e) {
+                throw new Http.BadRequest("limit must be an integer, got " + limitStr);
+            }
+            if (limit < 1 || limit > 50) {
+                throw new Http.BadRequest("limit must be between 1 and 50, got " + limit);
+            }
+        }
+
+        // Parse and validate offset (default 0)
+        int offset = 0;
+        String offsetStr = q.get("offset");
+        if (offsetStr != null && !offsetStr.isBlank()) {
+            try {
+                offset = Integer.parseInt(offsetStr);
+            } catch (NumberFormatException e) {
+                throw new Http.BadRequest("offset must be an integer, got " + offsetStr);
+            }
+            if (offset < 0) {
+                throw new Http.BadRequest("offset cannot be negative, got " + offset);
+            }
+        }
+
+        // Filter orders
+        List<Order> filtered = new ArrayList<>();
+        synchronized (ORDERS) {
+            for (Order o : ORDERS.values()) {
+                if (filterStatus == null || o.status() == filterStatus) {
+                    filtered.add(o);
+                }
+            }
+        }
+
+        // Slice page according to offset and limit
+        int total = filtered.size();
+        int fromIndex = Math.min(offset, total);
+        int toIndex = Math.min(fromIndex + limit, total);
+        List<Order> page = filtered.subList(fromIndex, toIndex);
+
+        // Return response
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("items", page);
+        response.put("total", total);
+        response.put("limit", limit);
+        response.put("offset", offset);
+        Http.send(ex, 200, response);
     }
 
     /**
-     * PATCH /orders/{id}   Body: {"status":"CANCELLED"}
+     * PATCH /orders/{id} Body: {"status":"CANCELLED"}
      * TODO(4): customers may only CANCEL, and only while the order is still PLACED.
-     *   - order missing                         -> 404
-     *   - status missing or anything but CANCELLED -> 400 (a customer can't mark an order DELIVERED!)
-     *   - order not in PLACED                   -> 409 Conflict  {"error": "cannot cancel an order that is PREPARING"}
-     *   - otherwise                             -> 200 with the updated order
+     * - order missing -> 404
+     * - status missing or anything but CANCELLED -> 400 (a customer can't mark an
+     * order DELIVERED!)
+     * - order not in PLACED -> 409 Conflict {"error": "cannot cancel an order that
+     * is PREPARING"}
+     * - otherwise -> 200 with the updated order
      */
     static void patchOrder(HttpExchange ex, String id) throws IOException {
         Map<String, Object> body = Http.body(ex);
-        throw new UnsupportedOperationException("TODO(4) not implemented yet");
+        Object statusObj = body.get("status");
+        if (!(statusObj instanceof String statusStr) || statusStr.isBlank()) {
+            throw new Http.BadRequest("status is missing or not a string");
+        }
+        Status newStatus;
+        try {
+            newStatus = Status.valueOf(statusStr);
+        } catch (IllegalArgumentException e) {
+            throw new Http.BadRequest("unknown status: " + statusStr);
+        }
+        if (!newStatus.equals(Status.CANCELLED)) {
+            throw new Http.BadRequest("can only CANCEL the orders");
+        }
+        Order newOrder;
+        synchronized (ORDERS) {
+            Order order = ORDERS.get(id);
+            if (order == null) {
+                Http.send(ex, 404, Map.of("error", "Order " + id + " not found"));
+                return;
+            }
+            if (order.status() != Status.PLACED) {
+                Http.send(ex, 409, Map.of("error", "cannot cancel an order that is " + order.status()));
+                return;
+            }
+            newOrder = order.withStatus(newStatus);
+            ORDERS.put(id, newOrder);
+        }
+        Http.send(ex, 200, newOrder);
     }
 
     /**
-     * POST /admin/orders/{id}/advance   (given — pretend this is the restaurant's tablet app)
-     * Moves an order one step forward: PLACED -> PREPARING -> OUT_FOR_DELIVERY -> DELIVERED.
+     * POST /admin/orders/{id}/advance (given — pretend this is the restaurant's
+     * tablet app)
+     * Moves an order one step forward: PLACED -> PREPARING -> OUT_FOR_DELIVERY ->
+     * DELIVERED.
      * Check.java uses it to test the 409 Conflict case.
      */
     static void adminAdvance(HttpExchange ex) throws IOException {
@@ -165,13 +329,17 @@ public class OrderApi {
         }
         synchronized (ORDERS) {
             Order o = ORDERS.get(parts[3]);
-            if (o == null) { Http.send(ex, 404, Map.of("error", "Order not found")); return; }
+            if (o == null) {
+                Http.send(ex, 404, Map.of("error", "Order not found"));
+                return;
+            }
             Status next = switch (o.status()) {
                 case PLACED -> Status.PREPARING;
                 case PREPARING -> Status.OUT_FOR_DELIVERY;
                 default -> Status.DELIVERED;
             };
-            if (o.status() == Status.CANCELLED) next = Status.CANCELLED;
+            if (o.status() == Status.CANCELLED)
+                next = Status.CANCELLED;
             Order updated = o.withStatus(next);
             ORDERS.put(o.id(), updated);
             Http.send(ex, 200, updated);
@@ -185,7 +353,9 @@ public class OrderApi {
 
 final class Http {
     static final class BadRequest extends RuntimeException {
-        BadRequest(String m) { super(m); }
+        BadRequest(String m) {
+            super(m);
+        }
     }
 
     /** Wraps a handler: TODOs become 501, bad JSON becomes 400, bugs become 500. */
@@ -207,12 +377,16 @@ final class Http {
     }
 
     private static void trySend(HttpExchange ex, int status, Object body) {
-        try { send(ex, status, body); } catch (Exception ignored) { /* response already started */ }
+        try {
+            send(ex, status, body);
+        } catch (Exception ignored) {
+            /* response already started */ }
     }
 
     static void send(HttpExchange ex, int status, Object body) throws IOException {
         byte[] bytes = body == null ? new byte[0] : Json.write(body).getBytes(StandardCharsets.UTF_8);
-        if (bytes.length > 0) ex.getResponseHeaders().set("Content-Type", "application/json");
+        if (bytes.length > 0)
+            ex.getResponseHeaders().set("Content-Type", "application/json");
         System.out.printf("%-6s %-40s -> %d%n", ex.getRequestMethod(), ex.getRequestURI(), status);
         if (bytes.length == 0) {
             ex.sendResponseHeaders(status, -1);
@@ -235,21 +409,28 @@ final class Http {
 
     @SuppressWarnings("unchecked")
     static Map<String, Object> parseObject(String raw) {
-        if (raw.isBlank()) throw new BadRequest("Request body is required");
+        if (raw.isBlank())
+            throw new BadRequest("Request body is required");
         Object parsed;
-        try { parsed = Json.parse(raw); } catch (RuntimeException e) { throw new BadRequest("Malformed JSON: " + e.getMessage()); }
-        if (!(parsed instanceof Map)) throw new BadRequest("Body must be a JSON object");
+        try {
+            parsed = Json.parse(raw);
+        } catch (RuntimeException e) {
+            throw new BadRequest("Malformed JSON: " + e.getMessage());
+        }
+        if (!(parsed instanceof Map))
+            throw new BadRequest("Body must be a JSON object");
         return (Map<String, Object>) parsed;
     }
 
     static Map<String, String> query(HttpExchange ex) {
         Map<String, String> q = new LinkedHashMap<>();
         String raw = ex.getRequestURI().getRawQuery();
-        if (raw == null) return q;
+        if (raw == null)
+            return q;
         for (String pair : raw.split("&")) {
             String[] kv = pair.split("=", 2);
             q.put(java.net.URLDecoder.decode(kv[0], StandardCharsets.UTF_8),
-                  kv.length > 1 ? java.net.URLDecoder.decode(kv[1], StandardCharsets.UTF_8) : "");
+                    kv.length > 1 ? java.net.URLDecoder.decode(kv[1], StandardCharsets.UTF_8) : "");
         }
         return q;
     }
@@ -262,7 +443,8 @@ final class Json {
         try {
             Object v = p.value();
             p.ws();
-            if (p.i != s.length()) throw new IllegalArgumentException("Unexpected text at position " + p.i);
+            if (p.i != s.length())
+                throw new IllegalArgumentException("Unexpected text at position " + p.i);
             return v;
         } catch (IndexOutOfBoundsException e) {
             throw new IllegalArgumentException("Unexpected end of JSON");
@@ -270,10 +452,14 @@ final class Json {
     }
 
     static String write(Object o) {
-        if (o == null) return "null";
-        if (o instanceof String s) return quote(s);
-        if (o instanceof Number || o instanceof Boolean) return o.toString();
-        if (o instanceof Enum<?> e) return quote(e.name());
+        if (o == null)
+            return "null";
+        if (o instanceof String s)
+            return quote(s);
+        if (o instanceof Number || o instanceof Boolean)
+            return o.toString();
+        if (o instanceof Enum<?> e)
+            return quote(e.name());
         if (o instanceof Map<?, ?> m) {
             StringJoiner j = new StringJoiner(",", "{", "}");
             m.forEach((k, v) -> j.add(quote(String.valueOf(k)) + ":" + write(v)));
@@ -281,7 +467,8 @@ final class Json {
         }
         if (o instanceof Collection<?> c) {
             StringJoiner j = new StringJoiner(",", "[", "]");
-            for (Object v : c) j.add(write(v));
+            for (Object v : c)
+                j.add(write(v));
             return j.toString();
         }
         if (o instanceof Record r) {
@@ -309,7 +496,12 @@ final class Json {
                 case '\n' -> b.append("\\n");
                 case '\r' -> b.append("\\r");
                 case '\t' -> b.append("\\t");
-                default -> { if (c < 0x20) b.append(String.format("\\u%04x", (int) c)); else b.append(c); }
+                default -> {
+                    if (c < 0x20)
+                        b.append(String.format("\\u%04x", (int) c));
+                    else
+                        b.append(c);
+                }
             }
         }
         return b.append('"').toString();
@@ -318,7 +510,10 @@ final class Json {
     private static final class Parser {
         final String s;
         int i;
-        Parser(String s) { this.s = s; }
+
+        Parser(String s) {
+            this.s = s;
+        }
 
         Object value() {
             ws();
@@ -327,14 +522,20 @@ final class Json {
                 i++;
                 Map<String, Object> m = new LinkedHashMap<>();
                 ws();
-                if (s.charAt(i) == '}') { i++; return m; }
+                if (s.charAt(i) == '}') {
+                    i++;
+                    return m;
+                }
                 while (true) {
                     ws();
                     String k = str();
                     expect(':');
                     m.put(k, value());
                     ws();
-                    if (s.charAt(i) == ',') { i++; continue; }
+                    if (s.charAt(i) == ',') {
+                        i++;
+                        continue;
+                    }
                     expect('}');
                     return m;
                 }
@@ -343,22 +544,40 @@ final class Json {
                 i++;
                 List<Object> l = new ArrayList<>();
                 ws();
-                if (s.charAt(i) == ']') { i++; return l; }
+                if (s.charAt(i) == ']') {
+                    i++;
+                    return l;
+                }
                 while (true) {
                     l.add(value());
                     ws();
-                    if (s.charAt(i) == ',') { i++; continue; }
+                    if (s.charAt(i) == ',') {
+                        i++;
+                        continue;
+                    }
                     expect(']');
                     return l;
                 }
             }
-            if (c == '"') return str();
-            if (s.startsWith("true", i)) { i += 4; return true; }
-            if (s.startsWith("false", i)) { i += 5; return false; }
-            if (s.startsWith("null", i)) { i += 4; return null; }
+            if (c == '"')
+                return str();
+            if (s.startsWith("true", i)) {
+                i += 4;
+                return true;
+            }
+            if (s.startsWith("false", i)) {
+                i += 5;
+                return false;
+            }
+            if (s.startsWith("null", i)) {
+                i += 4;
+                return null;
+            }
             int st = i;
-            while (i < s.length() && "+-0123456789.eE".indexOf(s.charAt(i)) >= 0) i++;
-            if (st == i) throw new IllegalArgumentException("Unexpected character '" + c + "' at position " + i);
+            while (i < s.length() && "+-0123456789.eE".indexOf(s.charAt(i)) >= 0)
+                i++;
+            if (st == i)
+                throw new IllegalArgumentException("Unexpected character '" + c + "' at position " + i);
             String n = s.substring(st, i);
             return n.matches("-?\\d+") ? (Object) Long.parseLong(n) : Double.parseDouble(n);
         }
@@ -368,8 +587,12 @@ final class Json {
             StringBuilder b = new StringBuilder();
             while (true) {
                 char c = s.charAt(i++);
-                if (c == '"') return b.toString();
-                if (c != '\\') { b.append(c); continue; }
+                if (c == '"')
+                    return b.toString();
+                if (c != '\\') {
+                    b.append(c);
+                    continue;
+                }
                 char e = s.charAt(i++);
                 switch (e) {
                     case 'n' -> b.append('\n');
@@ -377,17 +600,24 @@ final class Json {
                     case 'r' -> b.append('\r');
                     case 'b' -> b.append('\b');
                     case 'f' -> b.append('\f');
-                    case 'u' -> { b.append((char) Integer.parseInt(s.substring(i, i + 4), 16)); i += 4; }
+                    case 'u' -> {
+                        b.append((char) Integer.parseInt(s.substring(i, i + 4), 16));
+                        i += 4;
+                    }
                     default -> b.append(e);
                 }
             }
         }
 
-        void ws() { while (i < s.length() && Character.isWhitespace(s.charAt(i))) i++; }
+        void ws() {
+            while (i < s.length() && Character.isWhitespace(s.charAt(i)))
+                i++;
+        }
 
         void expect(char c) {
             ws();
-            if (i >= s.length() || s.charAt(i) != c) throw new IllegalArgumentException("Expected '" + c + "' at position " + i);
+            if (i >= s.length() || s.charAt(i) != c)
+                throw new IllegalArgumentException("Expected '" + c + "' at position " + i);
             i++;
         }
     }
