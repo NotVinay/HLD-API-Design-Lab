@@ -147,7 +147,55 @@ public class TrackingServer {
      *   - Take the snapshot inside the lock, send the HTTP response AFTER unlocking.
      */
     static void longPoll(HttpExchange ex, TrackedOrder order, Map<String, String> q) throws IOException {
-        throw new UnsupportedOperationException("TODO(1) not implemented yet");
+        String sinceStr = q.get("sinceVersion");
+        if (sinceStr == null || sinceStr.isBlank()) {
+            throw new Http.BadRequest("sinceVersion is required for long polling");
+        }
+        int sinceVersion;
+        try {
+            sinceVersion = Integer.parseInt(sinceStr);
+        } catch (NumberFormatException e) {
+            throw new Http.BadRequest("sinceVersion must be an integer, got " + sinceStr);
+        }
+
+        long timeoutMs = 25000;
+        String timeoutStr = q.get("timeoutMs");
+        if (timeoutStr != null && !timeoutStr.isBlank()) {
+            try {
+                timeoutMs = Long.parseLong(timeoutStr);
+            } catch (NumberFormatException e) {
+                throw new Http.BadRequest("timeoutMs must be an integer, got " + timeoutStr);
+            }
+        }
+        timeoutMs = Math.min(timeoutMs, MAX_WAIT_MS);
+
+        long remainingNanos = TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+        Map<String, Object> snap = null;
+        boolean hasNews = false;
+
+        order.lock.lock();
+        try {
+            while (order.version <= sinceVersion && remainingNanos > 0) {
+                try {
+                    remainingNanos = order.changed.awaitNanos(remainingNanos);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+            if (order.version > sinceVersion) {
+                hasNews = true;
+                snap = order.snapshot();
+            }
+        } finally {
+            order.lock.unlock();
+        }
+
+        if (hasNews) {
+            Http.send(ex, 200, snap);
+        } else {
+            Http.send(ex, 204, null);
+        }
     }
 }
 
