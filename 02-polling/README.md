@@ -46,21 +46,30 @@ java PollingClient.java long
 ```
 | Mode | HTTP requests | Wasted | Avg notice delay | Missed steps |
 |---|---|---|---|---|
-| short 500 ms | | | | |
-| short 2000 ms | | | | |
-| short 5000 ms | | | | |
-| long | | | | |
+| short 500 ms | ~24 | ~20 | ~250 ms | 0 |
+| short 2000 ms | ~7 | ~3 | ~1050 ms | 0–1 |
+| short 5000 ms | ~3 | 0 | ~2400 ms | 1–2 |
+| long | 4 | 0 | ~10 ms | 0 |
 
 Run `short 5000` a few times — you'll see `!! skipped` lines. The app **never showed** some statuses.
 
 ## Think & answer
 1. Short polling has one knob (interval). What do you trade when you turn it down? When you turn it up?
+   - **Turn down (e.g. 500 ms):** Low notice delay (fresher UI), but massive traffic amplification, high server CPU load, and lots of wasted requests.
+   - **Turn up (e.g. 5000 ms):** Low server load, but high UI lag and missed intermediate status changes (e.g., skips `ACCEPTED` or `PREPARING`).
 2. 1 million users each polling every 2 s — how many requests/second hit your servers, and how many are wasted?
+   - **500,000 req/sec** hit the servers. If an order advances 4 times across a 15-minute delivery (450 polls per user), only 4 requests contain news. **>99% (~495,000 req/sec) are completely wasted empty checks.**
 3. Long polling holds a request open for up to 30 s. Why did we use **virtual threads**? What breaks with a fixed pool of 8 threads and 9 waiting users?
+   - In traditional platform threads with a fixed pool of 8, 8 parked long-polling clients monopolize all threads. The 9th request hangs or times out due to thread pool exhaustion.
+   - Java 21 **virtual threads** unmount from their OS carrier thread while parked on `Condition.awaitNanos()`, using ~1 KB of memory and zero CPU, scaling to tens of thousands of concurrent waiting requests.
 4. Why `signalAll()` and not `signal()`? (The checker has a test for this.)
+   - Multiple clients/devices may track the same order simultaneously (customer phone, web browser, delivery rider, support agent). `signal()` only wakes up one arbitrary thread; `signalAll()` wakes up every client waiting on that order.
 5. Why does the client send `sinceVersion` instead of the server remembering "what this client last saw"?
+   - Keeps the server **stateless**. The request can be routed to any instance behind a load balancer without needing distributed session affinity. It also makes retries and network reconnects naturally idempotent.
 6. Load balancers and proxies often kill idle connections after ~60 s. How does the timeout + 204 design survive that?
+   - The server proactively completes the request before the proxy's idle timeout (e.g., after 25–30 s) with `204 No Content`. The client immediately re-establishes a fresh request, preventing abrupt TCP resets (`ECONNRESET` or 504 Gateway Timeout).
 7. When is plain short polling still the **right** choice? (Hint: a report that takes 10 minutes to generate.)
+   - When updates are very infrequent or take a long time (e.g. generating a 10-minute CSV export or batch video rendering), when the client is simple (e.g. a curl script or cron job), or when clients connect through aggressive corporate proxies that disallow long-held connections.
 
 ## Stretch
 - Start 200 long-poll clients in parallel (a loop with `CompletableFuture`) and watch the server's thread count in `jconsole`. Then switch the executor to `Executors.newFixedThreadPool(8)` and repeat.
