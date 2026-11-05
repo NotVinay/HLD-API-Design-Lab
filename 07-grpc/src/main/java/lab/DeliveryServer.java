@@ -46,7 +46,20 @@ public class DeliveryServer {
          */
         @Override
         public void getEta(EtaRequest request, StreamObserver<EtaReply> responseObserver) {
-            throw new UnsupportedOperationException("TODO(1) not implemented yet");
+            Trip trip = TRIPS.get(request.getOrderId());
+            if (trip == null) {
+                responseObserver.onError(
+                        Status.NOT_FOUND.withDescription("No trip for " + request.getOrderId()).asRuntimeException());
+                return;
+            }
+            int minutes = (int) Math.ceil(trip.metersLeft() / METERS_PER_MINUTE);
+            EtaReply reply = EtaReply.newBuilder()
+                    .setOrderId(request.getOrderId())
+                    .setMinutes(minutes)
+                    .setRiderName(trip.riderName())
+                    .build();
+            responseObserver.onNext(reply);
+            responseObserver.onCompleted();
         }
 
         /**
@@ -60,7 +73,39 @@ public class DeliveryServer {
          */
         @Override
         public void trackRider(TrackRequest request, StreamObserver<RiderLocation> responseObserver) {
-            throw new UnsupportedOperationException("TODO(2) not implemented yet");
+            Trip trip = TRIPS.get(request.getOrderId());
+            if (trip == null) {
+                responseObserver.onError(
+                        Status.NOT_FOUND.withDescription("No trip for " + request.getOrderId()).asRuntimeException());
+                return;
+            }
+            ServerCallStreamObserver<RiderLocation> call = (ServerCallStreamObserver<RiderLocation>) responseObserver;
+            for (int i = 0; i < 6; i++) {
+                if (call.isCancelled()) {
+                    return;
+                }
+                double fraction = (double) i / 5.0;
+                int metersLeft = (int) (trip.metersLeft() * (1.0 - fraction));
+                double lat = trip.lat() + (i * 0.0004);
+                double lng = trip.lng() + (i * 0.0004);
+
+                RiderLocation loc = RiderLocation.newBuilder()
+                        .setOrderId(request.getOrderId())
+                        .setLat(lat)
+                        .setLng(lng)
+                        .setMetersLeft(metersLeft)
+                        .setTimestampMs(System.currentTimeMillis())
+                        .build();
+                responseObserver.onNext(loc);
+
+                try {
+                    Thread.sleep(500);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+            responseObserver.onCompleted();
         }
 
         /**
@@ -72,7 +117,35 @@ public class DeliveryServer {
          */
         @Override
         public StreamObserver<RiderLocation> uploadRoute(StreamObserver<RouteSummary> responseObserver) {
-            return super.uploadRoute(responseObserver);   // answers UNIMPLEMENTED until you do it
+            return new StreamObserver<RiderLocation>() {
+                private int count = 0;
+                private double totalKm = 0.0;
+                private RiderLocation prev = null;
+
+                @Override
+                public void onNext(RiderLocation point) {
+                    count++;
+                    if (prev != null) {
+                        totalKm += km(prev, point);
+                    }
+                    prev = point;
+                }
+
+                @Override
+                public void onError(Throwable t) {
+                    System.err.println("uploadRoute error: " + t.getMessage());
+                }
+
+                @Override
+                public void onCompleted() {
+                    RouteSummary summary = RouteSummary.newBuilder()
+                            .setPoints(count)
+                            .setTotalKm(totalKm)
+                            .build();
+                    responseObserver.onNext(summary);
+                    responseObserver.onCompleted();
+                }
+            };
         }
     }
 

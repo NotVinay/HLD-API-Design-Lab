@@ -47,7 +47,25 @@ public class DeliveryClient {
      *      and e.getStatus().getDescription().
      */
     static void unary(DeliveryServiceGrpc.DeliveryServiceBlockingStub stub) {
-        throw new UnsupportedOperationException("TODO(4) not implemented yet");
+        // a) Unary call for "ord_1"
+        EtaReply reply = stub.withDeadlineAfter(2, TimeUnit.SECONDS)
+                .getEta(EtaRequest.newBuilder().setOrderId("ord_1").build());
+        System.out.println(reply.getRiderName() + " arrives in " + reply.getMinutes() + " min");
+
+        // b) Compare protobuf wire size vs JSON
+        int protoBytes = reply.getSerializedSize();
+        String json = String.format("{\"order_id\":\"%s\",\"minutes\":%d,\"rider_name\":\"%s\"}",
+                reply.getOrderId(), reply.getMinutes(), reply.getRiderName());
+        int jsonBytes = json.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        System.out.printf("wire size: protobuf %d bytes vs JSON %d bytes%n", protoBytes, jsonBytes);
+
+        // c) Error handling for unknown order "ord_999"
+        try {
+            stub.withDeadlineAfter(2, TimeUnit.SECONDS)
+                    .getEta(EtaRequest.newBuilder().setOrderId("ord_999").build());
+        } catch (StatusRuntimeException e) {
+            System.out.println("ord_999 -> " + e.getStatus().getCode() + ": " + e.getStatus().getDescription());
+        }
     }
 
     /**
@@ -57,7 +75,21 @@ public class DeliveryClient {
      *   Then try "ord_2" with stub.withDeadlineAfter(1, TimeUnit.SECONDS) -- what happens mid-stream?
      */
     static void streaming(DeliveryServiceGrpc.DeliveryServiceBlockingStub stub) {
-        throw new UnsupportedOperationException("TODO(5) not implemented yet");
+        Iterator<RiderLocation> it = stub.trackRider(TrackRequest.newBuilder().setOrderId("ord_1").build());
+        while (it.hasNext()) {
+            RiderLocation loc = it.next();
+            System.out.printf("  %4d m left  (%.4f, %.4f)%n", loc.getMetersLeft(), loc.getLat(), loc.getLng());
+        }
+
+        try {
+            Iterator<RiderLocation> it2 = stub.withDeadlineAfter(1, TimeUnit.SECONDS)
+                    .trackRider(TrackRequest.newBuilder().setOrderId("ord_2").build());
+            while (it2.hasNext()) {
+                it2.next();
+            }
+        } catch (StatusRuntimeException e) {
+            System.out.println("  ord_2 stream ended with " + e.getStatus().getCode() + " (deadline hit mid-stream)");
+        }
     }
 
     /** Given: client streaming needs the async stub. Works once TODO(3) on the server is done. */
