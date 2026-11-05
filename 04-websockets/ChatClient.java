@@ -22,20 +22,20 @@ public class ChatClient {
         String user = args.length > 1 ? args[1] : "terminal-" + (int) (Math.random() * 100);
         URI uri = URI.create("ws://localhost:8084/chat?order=" + enc(order) + "&user=" + enc(user));
 
-        /*
-         * TODO(5): Connect and chat.
-         *   1. Open the socket:
-         *        WebSocket ws = HttpClient.newHttpClient().newWebSocketBuilder()
-         *                         .buildAsync(uri, new PrintingListener()).join();
-         *   2. Read lines from System.in. For each line:
-         *        "/quit" -> ws.sendClose(WebSocket.NORMAL_CLOSURE, "bye").join(); stop
-         *        else    -> ws.sendText(<JSON {"type":"message","text":line}>, true).join();
-         *      Escape quotes in the text!  (line.replace("\\", "\\\\").replace("\"", "\\\""))
-         *
-         *   Notice: there's no request/response here. You send whenever you like, and
-         *   PrintingListener prints whatever the server pushes, whenever it pushes it.
-         */
-        throw new UnsupportedOperationException("TODO(5) not implemented yet");
+        WebSocket ws = HttpClient.newHttpClient().newWebSocketBuilder()
+                         .buildAsync(uri, new PrintingListener()).join();
+
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(System.in))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if ("/quit".equalsIgnoreCase(line.trim())) {
+                    ws.sendClose(WebSocket.NORMAL_CLOSURE, "bye").join();
+                    break;
+                }
+                String escaped = line.replace("\\", "\\\\").replace("\"", "\\\"");
+                ws.sendText("{\"type\":\"message\",\"text\":\"" + escaped + "\"}", true).join();
+            }
+        }
     }
 
     /** Called by the JDK whenever the server pushes something. (given) */
