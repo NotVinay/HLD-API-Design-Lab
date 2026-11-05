@@ -103,35 +103,69 @@ public class MerchantApp {
             return;
         }
 
-        /*
-         * TODO(3): Verify the signature.  Header looks like:  t=1730000000,v1=ab12...ef
-         *   - header missing or malformed                       -> 401
-         *   - |now - t| > TOLERANCE_SECONDS                     -> 401 (stops replay of an old, stolen request)
-         *   - expected = hmacHex(WEBHOOK_SECRET, t + "." + rawBody)
-         *     compare with v1 using MessageDigest.isEqual(a.getBytes(), b.getBytes())   <- constant time!
-         *     mismatch                                          -> 401
-         *   On any 401, also REJECTED.incrementAndGet().
-         */
-        // nothing here yet -- so right now ANYONE can POST a fake "payment.succeeded"!
+        // TODO(3): Verify the signature
+        if (sigHeader == null || !sigHeader.contains("t=") || !sigHeader.contains("v1=")) {
+            REJECTED.incrementAndGet();
+            Http.send(ex, 401, Map.of("error", "missing or malformed QuickPay-Signature header"));
+            return;
+        }
+
+        long t;
+        String v1 = null;
+        try {
+            String[] parts = sigHeader.split(",");
+            long parsedT = -1;
+            for (String part : parts) {
+                if (part.startsWith("t=")) parsedT = Long.parseLong(part.substring(2));
+                else if (part.startsWith("v1=")) v1 = part.substring(3);
+            }
+            if (parsedT == -1 || v1 == null) throw new IllegalArgumentException();
+            t = parsedT;
+        } catch (Exception e) {
+            REJECTED.incrementAndGet();
+            Http.send(ex, 401, Map.of("error", "invalid signature header format"));
+            return;
+        }
+
+        long nowSec = System.currentTimeMillis() / 1000;
+        if (Math.abs(nowSec - t) > TOLERANCE_SECONDS) {
+            REJECTED.incrementAndGet();
+            Http.send(ex, 401, Map.of("error", "timestamp outside tolerance"));
+            return;
+        }
+
+        String expected = hmacHex(WEBHOOK_SECRET, t + "." + rawBody);
+        if (!MessageDigest.isEqual(expected.getBytes(StandardCharsets.UTF_8), v1.getBytes(StandardCharsets.UTF_8))) {
+            REJECTED.incrementAndGet();
+            Http.send(ex, 401, Map.of("error", "invalid signature"));
+            return;
+        }
 
         Map<String, Object> event = Http.parseObject(rawBody);
         String eventId = (String) event.get("id");
 
-        /*
-         * TODO(4): Idempotency. Gateways deliver "at least once", so the same event WILL arrive twice.
-         *   If eventId was already processed -> DUPLICATES.incrementAndGet() and respond 200
-         *   (200, not 409! A non-2xx would make the gateway retry a duplicate forever.)
-         *   Hint: PROCESSED_EVENTS.add(eventId) returns false if it was already there — atomic check-and-set.
-         */
-        // nothing here yet -- duplicates get processed twice
+        // TODO(4): Idempotency
+        if (!PROCESSED_EVENTS.add(eventId)) {
+            DUPLICATES.incrementAndGet();
+            Http.send(ex, 200, Map.of("result", "duplicate ignored"));
+            return;
+        }
 
-        /*
-         * TODO(5): Apply the event.
-         *   data.orderId -> the order.  Unknown order -> still 200 (log it; retrying won't help).
-         *   "payment.succeeded" -> status PAID       "payment.failed" -> status PAYMENT_FAILED
-         *   Respond 200 {"result":"ok"} quickly. (Slow work like emails belongs in a background job.)
-         */
-        throw new UnsupportedOperationException("TODO(5) not implemented yet");
+        // TODO(5): Apply the event
+        if (event.get("data") instanceof Map<?, ?> dataMap && dataMap.get("orderId") instanceof String orderId) {
+            Map<String, Object> order = ORDERS.get(orderId);
+            if (order != null) {
+                String type = (String) event.get("type");
+                if ("payment.succeeded".equals(type)) {
+                    order.put("status", "PAID");
+                } else if ("payment.failed".equals(type)) {
+                    order.put("status", "PAYMENT_FAILED");
+                }
+            } else {
+                System.out.println("[webhook] unknown order " + orderId + ", ignoring");
+            }
+        }
+        Http.send(ex, 200, Map.of("result", "ok"));
     }
 
     

@@ -108,23 +108,49 @@ public class PayGateway {
      *   (Why include the timestamp in what we sign? See README question 3.)
      */
     static String signatureHeader(String body, long unixSeconds) {
-        throw new UnsupportedOperationException("TODO(1) not implemented yet");
+        String message = unixSeconds + "." + body;
+        String v1 = hmacHex(WEBHOOK_SECRET, message);
+        return "t=" + unixSeconds + ",v1=" + v1;
     }
 
-    /**
-     * TODO(2): Deliver the webhook, retrying with exponential backoff.
-     *   for attempt = 1..MAX_ATTEMPTS:
-     *     - POST json to url with headers  Content-Type: application/json
-     *                                      QuickPay-Signature: signatureHeader(json, now in seconds)
-     *       (sign on EVERY attempt — the timestamp must be fresh)
-     *       use HttpRequest.newBuilder(...).timeout(Duration.ofSeconds(5))  — slow merchants count as failures
-     *     - recordAttempt(eventId, attempt, statusCodeOrErrorMessage)
-     *     - 2xx -> done, return
-     *     - anything else (non-2xx, timeout, connection refused) -> sleep 1s, 2s, 4s, 8s... then try again
-     *   After MAX_ATTEMPTS failures, print that the event was given up on (real gateways email you).
-     */
     static void deliverWithRetries(String url, String eventId, String json) {
-        throw new UnsupportedOperationException("TODO(2) not implemented yet");
+        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            long nowSec = System.currentTimeMillis() / 1000;
+            String sig = signatureHeader(json, nowSec);
+
+            HttpRequest req = HttpRequest.newBuilder(URI.create(url))
+                    .header("Content-Type", "application/json")
+                    .header("QuickPay-Signature", sig)
+                    .timeout(Duration.ofSeconds(5))
+                    .POST(HttpRequest.BodyPublishers.ofString(json))
+                    .build();
+
+            boolean success = false;
+            try {
+                HttpResponse<String> resp = HTTP.send(req, HttpResponse.BodyHandlers.ofString());
+                recordAttempt(eventId, attempt, resp.statusCode());
+                if (resp.statusCode() >= 200 && resp.statusCode() < 300) {
+                    success = true;
+                }
+            } catch (Exception e) {
+                recordAttempt(eventId, attempt, e.getMessage());
+            }
+
+            if (success) {
+                return;
+            }
+
+            if (attempt < MAX_ATTEMPTS) {
+                long sleepMs = 1000L * (1L << (attempt - 1)); // 1s, 2s, 4s, 8s
+                try {
+                    Thread.sleep(sleepMs);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+        }
+        System.out.println("[webhook] " + eventId + " permanently failed after " + MAX_ATTEMPTS + " attempts");
     }
 
     // ---------------- given ----------------
