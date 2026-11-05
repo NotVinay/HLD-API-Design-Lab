@@ -68,39 +68,51 @@ public class ChatServer {
      * Hints: MessageDigest.getInstance("SHA-1"), Base64.getEncoder()
      */
     static String acceptKey(String secWebSocketKey) throws Exception {
-        throw new UnsupportedOperationException("TODO(1) not implemented yet");
+        String input = secWebSocketKey.trim() + WEBSOCKET_GUID;
+        MessageDigest sha1 = MessageDigest.getInstance("SHA-1");
+        byte[] digest = sha1.digest(input.getBytes(StandardCharsets.UTF_8));
+        return Base64.getEncoder().encodeToString(digest);
     }
 
-    /**
-     * TODO(2): A client finished the handshake.
-     *   - add it to ROOMS (create the room's set if needed — ConcurrentHashMap.newKeySet() is thread-safe)
-     *   - tell EVERYONE in the room (including the newcomer):
-     *       {"type":"system","text":"<user> joined","online":[...names in the room...]}
-     *   Use broadcast(...) below.
-     */
     static void onOpen(Client c) {
-        throw new UnsupportedOperationException("TODO(2) not implemented yet");
+        ROOMS.computeIfAbsent(c.room, k -> ConcurrentHashMap.newKeySet()).add(c);
+        broadcast(c.room, system(c.room, c.user + " joined"), null);
     }
 
-    /**
-     * TODO(3): A text frame arrived from client c.
-     *   Parse it with Json.parse(text) (you get a Map).
-     *   - {"type":"message","text":"..."}  -> blank text? ignore it.
-     *        otherwise send {"type":"message","from":c.user,"text":...,"at":System.currentTimeMillis()}
-     *        to EVERYONE in the room (the sender's copy acts as a delivery receipt)
-     *   - {"type":"typing"}                -> send {"type":"typing","from":c.user} to everyone EXCEPT c
-     *   - anything else                    -> c.send({"type":"error","text":"unknown message type"})
-     */
     static void onMessage(Client c, String text) throws IOException {
-        throw new UnsupportedOperationException("TODO(3) not implemented yet");
+        Object parsed = Json.parse(text);
+        if (!(parsed instanceof Map<?, ?> map)) return;
+        Object type = map.get("type");
+        if ("message".equals(type)) {
+            Object textObj = map.get("text");
+            if (textObj instanceof String msgText && !msgText.isBlank()) {
+                Map<String, Object> msg = new LinkedHashMap<>();
+                msg.put("type", "message");
+                msg.put("from", c.user);
+                msg.put("text", msgText);
+                msg.put("at", System.currentTimeMillis());
+                broadcast(c.room, msg, null);
+            }
+        } else if ("typing".equals(type)) {
+            Map<String, Object> typing = new LinkedHashMap<>();
+            typing.put("type", "typing");
+            typing.put("from", c.user);
+            broadcast(c.room, typing, c);
+        } else {
+            c.send(Json.write(Map.of("type", "error", "text", "unknown message type")));
+        }
     }
 
-    /**
-     * TODO(4): The connection is gone (closed tab, lost network, close frame...).
-     *   Remove c from its room (drop the room when it's empty) and tell the others "<user> left".
-     */
     static void onClose(Client c) {
-        throw new UnsupportedOperationException("TODO(4) not implemented yet");
+        Set<Client> set = ROOMS.get(c.room);
+        if (set != null) {
+            set.remove(c);
+            if (set.isEmpty()) {
+                ROOMS.remove(c.room);
+            } else {
+                broadcast(c.room, system(c.room, c.user + " left"), null);
+            }
+        }
     }
 
     // =====================================================================
