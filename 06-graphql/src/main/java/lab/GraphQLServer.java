@@ -85,27 +85,32 @@ public class GraphQLServer {
      *   Read an argument with:  String cuisine = env.getArgument("cuisine");   (null if not passed)
      */
     static List<Restaurant> restaurants(DataFetchingEnvironment env) {
-        throw new UnsupportedOperationException("TODO(1) not implemented yet");
+        String cuisine = env.getArgument("cuisine");
+        if (cuisine == null || cuisine.isBlank()) {
+            return RESTAURANTS;
+        }
+        return RESTAURANTS.stream()
+                .filter(r -> r.cuisine().equalsIgnoreCase(cuisine.trim()))
+                .toList();
     }
 
-    /**
-     * TODO(2): Query.restaurant(id: ID!)  -> the restaurant, or null if not found.
-     *   (null is fine: the schema says `Restaurant` without "!", so it's nullable.)
-     */
     static Restaurant restaurant(DataFetchingEnvironment env) {
-        throw new UnsupportedOperationException("TODO(2) not implemented yet");
+        String id = env.getArgument("id");
+        if (id == null) return null;
+        return RESTAURANTS.stream()
+                .filter(r -> r.id().equals(id))
+                .findFirst()
+                .orElse(null);
     }
 
-    /**
-     * TODO(3): Restaurant.menu(vegOnly: Boolean = false)
-     *   This is a FIELD resolver: it runs once per restaurant, only if the query asks for `menu`.
-     *   - The parent restaurant:   Restaurant r = env.getSource();
-     *   - The argument:            boolean vegOnly = env.getArgument("vegOnly");
-     *   - Call MENU_QUERIES.incrementAndGet() (this is our pretend "SELECT * FROM menu WHERE ...")
-     *   - Return MENU items for r.id(), filtered by veg when vegOnly is true.
-     */
     static List<MenuItem> menu(DataFetchingEnvironment env) {
-        throw new UnsupportedOperationException("TODO(3) not implemented yet");
+        Restaurant r = env.getSource();
+        Boolean vegOnly = env.getArgument("vegOnly");
+        MENU_QUERIES.incrementAndGet();
+        return MENU.stream()
+                .filter(m -> m.restaurantId().equals(r.id()))
+                .filter(m -> vegOnly == null || !vegOnly || m.veg())
+                .toList();
     }
 
     /** Restaurant.reviews(last: Int = 3) — GIVEN, use it as the example for TODO 3. */
@@ -118,17 +123,21 @@ public class GraphQLServer {
         return newestFirst.subList(0, Math.min(last, newestFirst.size()));
     }
 
-    /**
-     * TODO(4): Mutation.addReview(input: ReviewInput!)
-     *   Map<String, Object> input = env.getArgument("input");
-     *   - restaurantId must exist          -> else throw new IllegalArgumentException("No restaurant r99")
-     *   - rating must be 1..5              -> else throw new IllegalArgumentException("rating must be 1..5")
-     *   - create Review("v" + REVIEW_SEQ.incrementAndGet(), restaurantId, "guest", rating, comment)
-     *   - add it to REVIEWS and return it
-     *   Note: a thrown exception does NOT give an HTTP 500. It shows up in the "errors" array (see README Q2).
-     */
     static Review addReview(DataFetchingEnvironment env) {
-        throw new UnsupportedOperationException("TODO(4) not implemented yet");
+        Map<String, Object> input = env.getArgument("input");
+        String restaurantId = (String) input.get("restaurantId");
+        boolean exists = RESTAURANTS.stream().anyMatch(r -> r.id().equals(restaurantId));
+        if (!exists) {
+            throw new IllegalArgumentException("No restaurant " + restaurantId);
+        }
+        int rating = ((Number) input.get("rating")).intValue();
+        if (rating < 1 || rating > 5) {
+            throw new IllegalArgumentException("rating must be 1..5");
+        }
+        String comment = (String) input.get("comment");
+        Review rev = new Review("v" + REVIEW_SEQ.incrementAndGet(), restaurantId, "guest", rating, comment);
+        REVIEWS.add(rev);
+        return rev;
     }
 
     // =====================================================================
